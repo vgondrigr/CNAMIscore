@@ -1,0 +1,427 @@
+---
+title: "ProjetScoreI"
+author: "Victor Gondran-Tellier"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache.path = "C:\\R\\cache", cache = TRUE, cache.lazy = FALSE)
+knitr::opts_knit$set(root.dir = "C:\\R\\projectIscore")
+```
+
+```{r sedd}
+set.seed(123)
+```
+
+```{r librairie, cache = FALSE}
+library("tidyverse") # readr
+library(plotly)
+library(DT)
+```
+
+## Creating the synthetic dataset
+
+### Selecting individuals from HapMap
+
+```{r populations, cache = FALSE}
+populations = read_table2("relationships_w_pops_051208.txt")
+head(populations)
+```
+
+```{r visualisationpopulation}
+table(populations$population)
+```
+
+```{r modificationpopulation}
+populations = populations %>%
+    mutate(select=sample(c(TRUE, FALSE), size=n(), replace=TRUE),
+           select=select & population %in% c("CEU", "TSI"))
+```
+
+```{r creationfichierpopulation}
+write_tsv(populations %>% filter(select), "selected.inp")
+```
+
+We then call plink to select the individuals.
+
+```{bash filtragebimbambed}
+plink --bfile hapmap3_r1_b37_fwd_consensus.qc.poly.recode \
+  --keep selected.inp \
+  --make-bed --out dataset
+```
+
+```{bash retiragebimbambed}
+plink --bfile hapmap3_r1_b37_fwd_consensus.qc.poly.recode \
+  --remove selected.inp \
+  --make-bed --out fakemap
+```
+
+### Creating a phenotype
+
+```{bash creationphenotype}
+plink --bfile dataset \
+  --geno 0. \
+  --make-bed --out dataset-100pc
+```
+
+```{bash creationphenotypesuite}
+plink --bfile dataset-100pc \
+  --maf 0.05 \
+  --make-bed --out dataset-100pc
+```
+
+```{r lecturebim}
+snps = read_table2("dataset-100pc.bim", col_names=FALSE)
+```
+
+```{r dimensionbim}
+dim(snps)
+```
+
+```{r ecrtiturebim}
+write_tsv(sample_n(snps, 2000), "snps.inp", col_names=FALSE)
+```
+
+```{bash creationphenptypefin}
+plink --bfile dataset-100pc \
+  --extract snps.inp \
+  --recode A --out dataset-100pc-2000snps
+```
+
+```{r lecturefichierraw}
+df = read_table2("dataset-100pc-2000snps.raw")
+```
+
+```{r creationgenotype}
+geno = as.matrix(df[, 7:ncol(df)])
+dim(geno)
+geno[1:10, 1:5]
+```
+
+```{r histogramme, cache = FALSE}
+effsize = rnorm(ncol(geno))
+hist(effsize)
+```
+
+```{r histogrammesuite, cache = FALSE}
+liability = colSums(effsize * t(geno))
+hist(liability)
+```
+
+```{r creationvecteur}
+c(mean=mean(liability), median=median(liability), sd=sd(liability))
+```
+
+```{r creationliability}
+liability = liability + rnorm(length(liability), mean=0, sd=sd(liability))
+```
+
+```{r histogrammeliability, cache = FALSE}
+hist(liability)
+```
+
+```{r modificationvecteur}
+c(mean=mean(liability), median=median(liability), sd=sd(liability))
+```
+
+```{r creationtibblevecteur}
+pheno = select(df, FID, IID) %>%
+    mutate(quant=liability,
+           status=ifelse(liability > median(liability), 2, 1))
+```
+
+```{r ecrituredatasetpheno}
+write_tsv(pheno, "dataset.pheno")
+```
+
+### Selecting SNPs
+
+To make our dataset more realistic
+
+* Remove 2/3 of the SNPs
+* Rename 10% of the remaining SNPs
+
+```{r lectruredatasetbis}
+snps = read_table2("dataset.bim", col_names=FALSE)
+```
+
+```{r dimensionsnpssuite}
+dim(snps)
+```
+
+```{r lecturesnpsuite}
+snps = sample_n(snps, size=500000) %>% arrange(X1, X4)
+head(snps)
+```
+
+```{r ecrituresnpsuite}
+write_tsv(snps, "snps.inp")
+```
+
+```{bash modificationdatasettrois}
+plink --bfile dataset \
+  --extract snps.inp \
+  --make-bed --out dataset
+```
+
+## Quality control
+
+```{bash filtragedatasettrois}
+plink --bfile dataset \
+  --geno 0.01 \
+  --mind 0.01 \
+  --maf  0.05 \
+  --hwe  0.000001 \
+  --make-bed --out clean
+```
+
+## IBD
+
+```{bash filtragedatasettroissuite}
+plink --bfile clean --indep-pairwise 1000 100 .3 --out indep
+```
+
+```{bash prunedataset}
+plink --bfile clean --extract indep.prune.in --make-bed --out pruned
+```
+
+```{bash pcadataset}
+plink --bfile pruned --pca --out pca
+```
+
+```{r lecturepca}
+pca = read_table2("pca.eigenvec", col_names=FALSE)
+```
+
+```{r visualisationpca}
+head(pca)
+```
+
+```{r graphepca, cache = FALSE}
+ggplot(pca, aes(X3, X4)) + geom_point()
+```
+
+```{bash filtragepruned}
+plink --bfile pruned --genome --min .125 --out ibd
+```
+
+```{r lectureibdgenome}
+ibd = read_table2("ibd.genome")
+sort(ibd$PI_HAT)
+```
+
+```{r dimensionibdgenome}
+dim(ibd)
+```
+
+```{r modificationibdgenome}
+ibd = ibd %>% group_by(FID1) %>% mutate(count=n()) %>% ungroup()
+ibd1 = ibd %>% filter(count == 1)
+ibd2 = ibd %>% filter(count == 2)
+dim(ibd1)
+```
+
+```{r dimensionibdgenomebis}
+dim(ibd2)
+```
+
+```{r ecritureibdgenome}
+ibd1 = select(ibd1, FID1, IID1)
+colnames(ibd1) = c("FID", "IID")
+write_tsv(ibd1, "related.inp")
+```
+
+```{r visualisationibdgenome}
+View(ibd2)
+```
+
+```{r creationtrios}
+trios = tibble(FID=c(ibd2$FID1, ibd2$FID2), IID=c(ibd2$IID1, ibd2$IID2))
+offspring = trios %>% group_by(FID, IID) %>% summarise(count=n())
+offspring = offspring %>% filter(count == 2) %>% select(FID, IID)
+write_tsv(offspring, "related.inp", append=TRUE, col_names=FALSE)
+```
+
+```{bash modificationclean}
+plink --bfile clean \
+  --remove related.inp \
+  --make-bed --out clean
+```
+
+```{bash modificationpruned}
+plink --bfile pruned \
+  --remove related.inp \
+  --make-bed --out pruned
+```
+## PCA: Population stratification
+
+```{bash pcapropre}
+plink --bfile pruned --pca --out pca
+```
+```{r creationpcapropre}
+pca = read_table2("pca.eigenvec", col_names=FALSE)
+```
+
+```{r dimensionpcapropre}
+dim(pca)
+```
+
+```{r graphepcapropre, cache = FALSE}
+colnames(pca)[1:2] = c("FID", "IID")
+colnames(pca)[3:ncol(pca)] = paste("PC", 1:(ncol(pca) - 2), sep="")
+
+ggplot(pca, aes(PC1, PC2)) +
+  geom_point()
+```
+
+
+* Association study without any stratification covariate: NOPE
+* Association study with continuous PC covariates
+* Association study with discrete stratification covariates (groups A, B, C)
+* Three seperate association studies + meta-analysis
+
+## PCA with R
+
+```{bash creationprunedraw}
+plink --bfile pruned --recode A --out pruned
+```
+
+```{r visualisationprunedraw}
+library("data.table")
+df = fread("pruned.raw")
+df[1:10, 1:10]
+```
+
+```{r modifdf}
+#Si le nombre de ligne est impaire, on retire une ligne à la fin du tibble
+if (nrow(df) %% 2 != 0) {
+  df = df[1:nrow(df) - 1]
+}
+
+numero = nrow(df)/2 + 1
+fin = nrow(df) + 1
+df[1:numero]$PHENOTYPE = 0
+df[numero:fin]$PHENOTYPE = 1
+datatable(df[, 1:10], options = list(pageLength = 5))
+```
+
+```{r modifdf}
+cas = df %>% filter(PHENOTYPE == 1)
+controle = df %>% filter(PHENOTYPE == 0)
+cas = cas[,7:ncol(cas)]
+controle = controle[,7:ncol(controle)]
+print(cas)
+print(controle)
+```
+
+```{r scoreI}
+
+print(cas[,1])
+print(controle[,1])
+mx = matrix(c(table(cas[,1]), table(controle[,1])), byrow=TRUE, nrow=2)
+
+taillecohorte = nrow(controle)
+print(taillecohorte)
+sommecell = 0
+for (i in 1:ncol(mx)) {
+
+    moyenneY = mx[1,i]/sum(mx[,i])
+
+    #Pour les valeurs incalculables, on met la valeur 0, cela n'a pas d'importance car dans ce cas cette valeur est multiplié par 0
+    if (is.na(moyenneY)) {
+
+      moyenneY = 0
+
+    }
+
+    cell = (sum(mx[,i])^2) * (moyenneY - taillecohorte/(taillecohorte + taillecohorte))^2
+
+    sommecell = sommecell + cell
+
+}
+
+denominateur = ((0 - taillecohorte/(taillecohorte + taillecohorte))^2) * taillecohorte + ((1 - taillecohorte/(taillecohorte + taillecohorte))^2) * taillecohorte
+
+scoreImoyenne = sommecell/denominateur
+print(scoreImoyenne)
+```
+
+```{r scoreIboucle}
+
+taillecohorte = nrow(controle)
+# vecteurscoreI = vector()
+print(ncol(cas))
+
+line = paste("IDvariant","\t","scoreI","\t","pvalueChi2")
+write(line, file = "iscore.tsv")
+
+for (j in 1:ncol(cas)) {
+# for (j in 1:10) {
+nom = names(cas)[j]
+mx = matrix(c(table(cas[,j]), table(controle[,j])), byrow=TRUE, nrow=2)
+
+# print(j)
+
+sommecell = 0
+
+for (i in 1:ncol(mx)) {
+
+    moyenneY = mx[1,i]/sum(mx[,i])
+
+    #Pour les valeurs incalculables, on met la valeur 0, cela n'a pas d'importance car dans ce cas cette valeur est multiplié par 0
+    if (is.na(moyenneY)) {
+
+      moyenneY = 0
+
+    }
+
+    cell = (sum(mx[,i])^2) * (moyenneY - taillecohorte/(taillecohorte + taillecohorte))^2
+
+    sommecell = sommecell + cell
+
+}
+
+denominateur = ((0 - taillecohorte/(taillecohorte + taillecohorte))^2) * taillecohorte + ((1 - taillecohorte/(taillecohorte + taillecohorte))^2) * taillecohorte
+
+scoreImoyenne = sommecell/denominateur
+
+t = chisq.test(mx)
+  
+pvalue = t$p.value
+
+line = paste(nom,"\t",scoreImoyenne,"\t",pvalue)
+write(line, file = "iscore.tsv" ,append=TRUE)
+}
+
+```
+
+```{r}
+library("data.table")
+library(ggplot2)
+dfiscore = fread("iscore.tsv")
+ggplot(dfiscore, aes(dfiscore$scoreI, dfiscore$pvalueChi2)) +  geom_point() +  geom_line() 
+```
+
+```{r}
+library("tidyverse")
+dfreduit = dfiscore %>% filter(scoreI > 25)
+print(dfreduit)
+```
+
+```{r}
+library("tidyverse")
+dfreduit = dfiscore %>% filter(scoreI < 9)
+
+ggplot(dfreduit, aes(dfreduit$scoreI, dfreduit$pvalueChi2)) +  geom_point() +  geom_line()
+```
+
+```{r}
+library("tidyverse")
+dfreduit = dfiscore %>% filter(pvalueChi2 <= 0.05)
+
+ggplot(dfreduit, aes(dfreduit$scoreI, dfreduit$pvalueChi2)) +  geom_point() +  geom_line()
+```
